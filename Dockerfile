@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 ########################
 # Build stage
 ########################
@@ -10,11 +8,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# 安装 uv（用来更快安装依赖）
+# 安装 uv，用它来装依赖
 RUN pip install --no-cache-dir -U pip \
  && pip install --no-cache-dir uv
 
-# 只拷贝构建所需文件（按仓库结构：pyproject + src）
+# 只拷贝构建所需文件
 COPY pyproject.toml uv.lock README.md README_EN.md UPLOAD_EXCEPTION_HANDLING.md ./
 COPY src ./src
 
@@ -30,12 +28,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HOME=/data
 
-# 给最终镜像装 git，满足 Hugging Face 自动注入的 `git config` 命令
-RUN apt-get update \
- && apt-get install -y --no-install-recommends git \
- && rm -rf /var/lib/apt/lists/*
-
-# 非 root 用户
+# 非 root 用户 + 数据目录
 RUN useradd -m -u 10001 appuser \
  && mkdir -p /data \
  && chown -R appuser:appuser /data
@@ -47,9 +40,9 @@ COPY --from=build /usr/local /usr/local
 
 USER appuser
 
-# Web 管理界面默认端口（README 示例 8888）
-EXPOSE 8888
+# HF Docker Space 默认应用端口是 7860（也会通过 $PORT 注入）
+EXPOSE 7860
 
-# 默认启动：开启 Web 面板；也允许 docker run 追加参数覆盖
-ENTRYPOINT ["acemcp"]
-CMD ["--web-port", "8888"]
+# 启动 acemcp，Web 管理界面监听 $PORT（默认 7860）
+# 使用 sh -c 是为了在 CMD 里展开环境变量
+ENTRYPOINT ["sh", "-c", "exec acemcp --web-port ${PORT:-7860}"]
