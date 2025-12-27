@@ -1,47 +1,65 @@
-# 单阶段 Dockerfile，兼容 Hugging Face Spaces + Dev Mode
+########################
+# Build stage
+########################
+FROM python:3.10-slim AS build
 
-FROM python:3.10-slim
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# 为可能需要编译的依赖准备基础工具（uvicorn[standard] 里带 uvloop/httptools 等）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 uv（项目本身就是用 uv/uvx）
+RUN pip install --no-cache-dir -U pip \
+ && pip install --no-cache-dir uv
+
+# 拷贝构建所需文件
+COPY pyproject.toml uv.lock README.md README_EN.md UPLOAD_EXCEPTION_HANDLING.md ./
+COPY src ./src
+
+# 安装 acemcp 到系统 site-packages（build 阶段）
+RUN uv pip install --system --no-cache-dir .
+
+########################
+# Runtime stage
+########################
+FROM python:3.10-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HOME=/data
 
-# 必须：给 Dev Mode 准备的系统工具（文档要求 bash/curl/wget/procps/git/git-lfs）
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        bash \
-        curl \
-        wget \
-        procps \
-        git \
-        git-lfs && \
-    rm -rf /var/lib/apt/lists/*
-
-# 创建运行用户（uid=1000 是 Dev Mode 的要求之一），顺便准备 /app 和 /data
-RUN useradd -m -u 1000 appuser && \
-    mkdir -p /app /data && \
-    chown -R appuser:appuser /app /data
-
-# 代码必须在 /app（Dev Mode 要求）
 WORKDIR /app
 
-# 把 Space 仓库里的所有文件拷进来（这里你应该已经把 acemcp 源码放进了 Space 仓库）
-COPY . /app
+# 1. 安装 git：解决 HF 在 runtime 阶段强行执行
+#    `git config --global user.email ...` / `user.name ...` 时的 git: not found
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git \
+    && rm -rf /var/lib/apt/lists/*
 
-# 安装 acemcp 依赖（用 uv 安装项目本身）
-RUN pip install --no-cache-dir -U pip && \
-    pip install --no-cache-dir uv && \
-    uv pip install --system --no-cache-dir .
+# 2. 创建非 root 用户 + 数据目录（/data 在 HF 会持久化）
+RUN useradd -m -u 10001 appuser \
+ && mkdir -p /data \
+ && chown -R appuser:appuser /data
 
-# 确保 /app 归 uid 1000 管（Dev Mode 要求）
-RUN chown -R 1000 /app
+# 3. 拷贝 build 阶段已经安装好的依赖和 acemcp
+COPY --from=build /usr/local /usr/local
 
-# 以后所有进程都用 uid 1000（和上面的 chown 对应）
-USER 1000
+# 4. 拷贝我们刚才写的启动脚本
+COPY space_web.py ./space_web.py
 
-# Hugging Face Docker 默认暴露端口 7860（也可以在 README 里 app_port 改）
+# 切到非 root 用户运行
+USER appuser
+
+# HF Spaces 默认用 PORT 环境变量暴露服务端口，习惯性设一下默认
+ENV PORT=7860
+
+# 声明容器监听端口（HF 会把第一个 EXPOSE 的端口当成入口）
 EXPOSE 7860
 
-# 启动 acemcp，Web 管理界面监听 7860
-# Dev Mode 只是把你的 app 当子进程起，这里 CMD 必须存在
-CMD ["acemcp", "--web-port", "7860"]
+# 只启动 Web 管理界面，不走 acemcp:run（避免 stdio 结束导致进程退出）
+CMD ["python", "space_web.py"]
