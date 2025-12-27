@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+
 ########################
 # Build stage
 ########################
@@ -8,7 +10,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# uv 用于更快安装（项目文档也推荐 uv/uvx）:contentReference[oaicite:4]{index=4}
+# 安装 uv（用来更快安装依赖）
 RUN pip install --no-cache-dir -U pip \
  && pip install --no-cache-dir uv
 
@@ -28,6 +30,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HOME=/data
 
+# 给最终镜像装 git，满足 Hugging Face 自动注入的 `git config` 命令
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git \
+ && rm -rf /var/lib/apt/lists/*
+
 # 非 root 用户
 RUN useradd -m -u 10001 appuser \
  && mkdir -p /data \
@@ -40,7 +47,7 @@ COPY --from=build /usr/local /usr/local
 
 USER appuser
 
-# Web 管理界面默认端口（README 示例 8888）:contentReference[oaicite:5]{index=5}
+# Web 管理界面默认端口（README 示例 8888）
 EXPOSE 8888
 
 # 默认启动：开启 Web 面板；也允许 docker run 追加参数覆盖
